@@ -1,0 +1,153 @@
+# epigenomes with classification
+```{bash}
+cd ~/MamDC/Result/Roadmap/Chromhmm/Savedata
+grep chrX ~/MamDC/Data/Ref/Human/Human.promoter.coding.bed > ~/MamDC/Data/Ref/Human/Human.promoter.coding.X.bed
+grep -vE "chrGL|chrKI|chrMT|chrX|chrY" ~/MamDC/Data/Ref/Human/Human.promoter.coding.bed > ~/MamDC/Data/Ref/Human/Human.promoter.coding.A.bed
+
+for i in `ls ~/Pseudo/Data/Seqdata/Roadmap/Chromhmm/*15_coreMarks_hg38lift_mnemonics.bed.gz`; do for chr in A X; do j=`basename $i`; echo "zcat $i| bedtools intersect -a - -b ~/MamDC/Data/Ref/Human/Human.promoter.coding.$chr.bed | awk '{print \$4}' | sort | uniq -c > ${j%.bed.gz}.$chr.promoter.tmp"; done ; done > intersect.sh
+bash intersect.sh
+
+#all, for percentage
+for i in `ls ~/Pseudo/Data/Seqdata/Roadmap/Chromhmm/*15_coreMarks_hg38lift_mnemonics.bed.gz`; do j=`basename $i` ; zcat $i| grep chrX |awk '{print $4}'| sort| uniq -c  > ${j%.bed.gz}.X.all.tmp ; done
+for i in `ls ~/Pseudo/Data/Seqdata/Roadmap/Chromhmm/*15_coreMarks_hg38lift_mnemonics.bed.gz`; do j=`basename $i` ; zcat $i| grep -vE "chrGL|chrKI|chrMT|chrX|chrY" |awk '{print $4}'| sort| uniq -c  > ${j%.bed.gz}.A.all.tmp ; done
+```
+
+
+```{r}
+rm(list = ls())
+wd <- "~/MamDC/Result/Roadmap/Chromhmm/Savedata"   #current directory
+#Species = tolower(Species)
+directory = file.path(wd)
+
+Files <- grep("A.promoter.tmp$",list.files(directory),value=TRUE)  
+filePath <- sapply(Files, function(x){paste(directory,x,sep='/')})   
+data <- lapply(filePath, function(x){ fread(x)})  
+#intersect a
+a <- data[1] %>% as.data.frame()
+a = a[,c(2,1)]
+colnames(a) <- c("epitype",strsplit(colnames(a)[1],split="_",fix=TRUE)[[1]][1]) # geneID, sample name
+for (i in 2:length(data)) {
+  b <- data[i] %>% as.data.frame()
+  b = b[,c(2,1)]
+  colnames(b) <- c("epitype",strsplit(colnames(b)[1],split="_",fix=TRUE)[[1]][1])
+  a[,i+1] = b[match(a$epitype,b$epitype),2]
+  colnames(a)[i+1] = colnames(b)[2]
+}
+
+#all a
+Files <- grep("A.all.tmp$",list.files(directory),value=TRUE)  
+filePath <- sapply(Files, function(x){paste(directory,x,sep='/')})   
+data <- lapply(filePath, function(x){ fread(x)})  
+a.all <- data[1] %>% as.data.frame()
+a.all = a.all[,c(2,1)]
+colnames(a.all) <- c("epitype",strsplit(colnames(a.all)[1],split="_",fix=TRUE)[[1]][1]) # geneID, sample name
+for (i in 2:length(data)) {
+  b <- data[i] %>% as.data.frame()
+  b = b[,c(2,1)]
+  colnames(b) <- c("epitype",strsplit(colnames(b)[1],split="_",fix=TRUE)[[1]][1])
+  a.all[,i+1] = b[match(a.all$epitype,b$epitype),2]
+  colnames(a.all)[i+1] = colnames(b)[2]
+}
+
+Files <- grep("X.promoter.tmp$",list.files(directory),value=TRUE)  
+filePath <- sapply(Files, function(x){paste(directory,x,sep='/')})   
+data <- lapply(filePath, function(x){ fread(x)})  
+#intersect x
+x <- data[1] %>% as.data.frame()
+x = x[,c(2,1)]
+colnames(x) <- c("epitype",strsplit(colnames(x)[1],split="_",fix=TRUE)[[1]][1]) # geneID, sample name
+for (i in 2:length(data)) {
+  b <- data[i] %>% as.data.frame()
+  b = b[,c(2,1)]
+  colnames(b) <- c("epitype",strsplit(colnames(b)[1],split="_",fix=TRUE)[[1]][1])
+  x[,i+1] = b[match(x$epitype,b$epitype),2]
+  colnames(x)[i+1] = colnames(b)[2]
+}
+
+#all x
+Files <- grep("X.all.tmp$",list.files(directory),value=TRUE)  
+filePath <- sapply(Files, function(x){paste(directory,x,sep='/')})   
+data <- lapply(filePath, function(x){ fread(x)})  
+x.all <- data[1] %>% as.data.frame()
+x.all = x.all[,c(2,1)]
+colnames(x.all) <- c("epitype",strsplit(colnames(x.all)[1],split="_",fix=TRUE)[[1]][1]) # geneID, sample name
+for (i in 2:length(data)) {
+  b <- data[i] %>% as.data.frame()
+  b = b[,c(2,1)]
+  colnames(b) <- c("epitype",strsplit(colnames(b)[1],split="_",fix=TRUE)[[1]][1])
+  x.all[,i+1] = b[match(x.all$epitype,b$epitype),2]
+  colnames(x.all)[i+1] = colnames(b)[2]
+}
+
+a[is.na(a)]=0
+x[is.na(x)]=0
+x.all[is.na(x.all)]=0
+for (i in 2:ncol(a)) {
+  a[,i] = a[,i]/a.all[,i]
+}
+for (i in 2:ncol(x)) {
+  x[,i] = x[,i]/x.all[,i]
+}
+
+a %<>% pivot_longer(.,cols=2:ncol(.)) %>% na.omit() %>% as.data.frame()
+x %<>% pivot_longer(.,cols=2:ncol(.)) %>% na.omit() %>% as.data.frame()
+a$chr = "A"
+x$chr = "X"
+a = rbind(a,x)
+clas = read.csv("~/MamDC/Result/Roadmap/Chromhmm/Savedata/Epigenome.classification.csv",header = TRUE,
+                sep = ",",stringsAsFactors = FALSE)
+a$group = clas[match(a$name,clas$Epigenome),ncol(clas)] # "Anatomy"
+a$num = lapply(a$epitype,function(x)strsplit(as.character(x),"_",fixed=T)[[1]][1]) %>% unlist() %>% as.numeric()
+a = a[order(a$num),]
+a$epitype %<>% factor(.,levels = unique(.))
+
+testP=c()
+for (i in unique(a$num)) {
+  test = wilcox.test(a[a$num==i & a$chr=="A",3],a[a$num==i & a$chr=="X",3])
+  testP = c(testP, test$p.value)
+}
+p1 = ggplot(a,aes(epitype,value))+
+    geom_boxplot(aes(fill=chr),notch = T,outlier.alpha = 0)+
+    theme_bw()+ylab("Proportion of state in promoter")+
+    theme(axis.title.x=element_blank(),
+          axis.text.x = element_text(size=12,angle = 45, hjust = 1, vjust = 1),
+          axis.title.y=element_text(size=14),axis.text.y = element_text(size=12),
+          #legend.direction = "horizontal",
+          legend.position=c(0.05,0.12),
+  legend.title = element_blank(),legend.background = element_rect(fill="transparent"))+
+  scale_fill_manual(values = c("#035782","#9c0b1f"))+
+  geom_text(aes(x,y,label =lab),
+              data = data.frame(x = 1:15,
+                                y = 0.95,
+                                lab = cut(testP,breaks = c(1,0.05,0.01,0.001,0),
+                                          labels = rev(c("n.s.","*","**","***")))),size=5)
+topptx(p1,filename = "~/MamDC/Result/Roadmap/Chromhmm/Picture/Human.propstate.XA.pptx",
+       width = 7,height = 6)
+
+
+m = tapply(a$value, paste(a$epitype,a$chr,sep = "."), mean) %>% as.data.frame()
+m$epitype = lapply(row.names(m),function(x)strsplit(x,".",fixed=T)[[1]][1]) %>% unlist()
+m$chr = lapply(row.names(m),function(x)strsplit(x,".",fixed=T)[[1]][2]) %>% unlist()
+
+a %<>% dplyr::filter(.,group %in% c("BLOOD","BONE","BRAIN","BREAST","ESC","FAT","GI_COLON","GI_INTESTINE","HEART",
+                                   "KIDNEY","LIVER","LUNG","MUSCLE","PANCREAS","SKIN","SPLEEN","THYMUS"))
+
+ggplot(a,aes(epitype,value))+geom_point(aes(color=group),position="jitter",shape=19,cex=1)+
+  #geom_boxplot(aes(fill=chr))+
+  theme_bw()+ylab("Proportion of state in promoter")+
+  theme(axis.title.x=element_blank(),legend.position="bottom",
+        axis.text.x = element_text(size=12,angle = 45, hjust = 1, vjust = 1),
+        axis.title.y=element_text(size=14),axis.text.y = element_text(size=12))+
+  scale_color_manual(values=c("#0093d6","#d5423e","#00a651","#7862a4","#ee9330","#fad227","#f4c489",
+                              "#6dc0ea","#eeaaa8","#95cea3","#c9bad4","#b8b8c2","#eae299","#b35275",
+                              "#000000","#f397c3","#eb3391"))+
+  facet_wrap(.~chr)
+
+  scale_color_manual(values = c(rep("grey",18),"black",rep("grey",11)))
+  
+  scale_color_manual(values = c("#ae5b39","#53a355","#c59228","#c59228","#000000","#ff9f0e","#4178ae",
+                                "#904964","#d4707d","#668c68","#e4191c","#69608a","#b65b73","#c2655e",
+                                "#e77526","#ffd925","#999999","#f182bc","#dab92e"))+
+  facet_wrap(.~chr)
+```
+

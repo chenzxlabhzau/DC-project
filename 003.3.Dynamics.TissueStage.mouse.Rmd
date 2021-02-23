@@ -1,0 +1,432 @@
+---
+title: "003.3.Dynamics.TissueStage.mouse"
+author: "qians"
+date: "12/9/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{bash eval=FALSE}
+cd ~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Picture
+grep -v "#" gencode.vM19.annotation.gtf | grep -w gene | awk -F ";" '{print $1"\t"$2"\t"$3}'| awk -F "\t" '{print $1"\t"$4"\t"$5"\t"$9"\t"$10"\t"$11}'| sed 's/gene_id//g' | sed 's/gene_type//g' | sed 's/gene_name//g'| sed 's/"//g' | sed 's/ //g' > Mouse.gencode.gene.bed #for annotate gene location
+
+#for FPKM
+awk -F "\t" '$3=="exon" {print $0}' gencode.vM19.annotation.gtf | awk -F ";" '{print $1"\t"$2"\t"$3"\t"$4}'| sed 's/gene_name //g' | sed 's/"//g' | sed 's/ //g' |awk -F "\t" '{print $12"NAME"$1"\t"$4"\t"$5}' | bedtools sort -i - | bedtools merge -i - | sed 's/NAME/\t/g' | awk -F "\t" '{print $2"\t"$3"\t"$4"\t"$1"\t"$4-$3}' > Mouse.nonreExonlength.bed
+```
+
+## For mouse X:A ratio stage danamics 
+from "Ageing hallmarks exhibit organ-specific temporal signatures"
+```{r}
+#Data from "Ageing hallmarks exhibit organ-specific temporal signatures"
+## Stage
+rm(list = ls())
+a <- fread("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/GSE132040_190214_A00111_0269_AHH3J3DSXX_190214_A00111_0270_BHHMFWDSXX.csv") %>% 
+  as.data.frame()
+a = a[1:(nrow(a)-5),]
+row.names(a) = a$gene
+cpm = apply(a[,-1], 2, function(x)x/sum(x)*10^6) %>% as.data.frame()
+cpm[1:3,1:3]
+colnames(cpm) %<>% gsub(".gencode.vM19","",.)
+info = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/GSE132040_MACA_Bulk_metadata.csv")
+info$characteristics..age %<>% as.numeric()
+table(colnames(cpm) %in% info$Sample.name)
+b = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/Mouse.gencode.gene.bed",
+             header = FALSE,sep = "\t",stringsAsFactors = F)
+cpm$type = b[match(row.names(cpm),b$V6),5]
+cpm %<>% dplyr::filter(.,type=="protein_coding")
+
+info$source.name %<>% lapply(.,function(x)strsplit(x,split = "_",fixed = T)[[1]][1]) %>% unlist() %>%
+  gsub("Limb","Limb Muscle",.) %>% gsub("Small","Small Intestine",.)
+info %<>% dplyr::filter(.,!grepl("NA",source.name))
+info$sample = paste(info$source.name,info$characteristics..sex,info$characteristics..age,sep = "_") # tissue + sex + stage
+
+df = matrix(0,nrow = length(unique(info$source.name)),ncol = 5) %>% as.data.frame()
+colnames(df) = c(paste(rep(c("X","A"),2),rep(c("Positive","Negative"),each=2),sep = "_"),"Meanratio") #X_Up A_Up X_Down A_Down
+row.names(df) = unique(info$source.name)
+for (sex in c("m","f")) {
+  for (Tissue in unique(info$source.name)) {
+  focal.tissue = dplyr::filter(info,source.name == Tissue & characteristics..sex == sex)
+  focal.express = cpm[,focal.tissue$Sample.name]
+  if (all(focal.tissue$Sample.name==colnames(focal.express))) { # check order
+    cor.r = t(do.call(rbind, lapply(1:nrow(focal.express), function(i){
+      cor.test(as.numeric(focal.express[i,]), focal.tissue$characteristics..age)$estimate})))
+    cor.p = t(do.call(rbind, lapply(1:nrow(focal.express), function(i){
+      cor.test(as.numeric(focal.express[i,]), focal.tissue$characteristics..age)$p.value})))
+    focal.express$R = as.numeric(cor.r)
+    focal.express$P = as.numeric(cor.p)
+    focal.express$chr = b[match(row.names(focal.express),b$V6),1]
+    focal.express %<>% dplyr::filter(.,chr %in% paste0("chr",c(1:100,"X")))
+    focal.express[focal.express$chr!="chrX","chr"]="chrA"
+    focal.express[is.na(focal.express)]=0
+    
+    df[Tissue,"Meanratio"] = sum(focal.express$chr=="chrX")/nrow(focal.express)
+    df[Tissue,"X_Positive"] = sum(focal.express$R> 0.5 & focal.express$P<0.05 & focal.express$chr=="chrX")
+    df[Tissue,"A_Positive"] = sum(focal.express$R> 0.5 & focal.express$P<0.05 & focal.express$chr=="chrA")
+    df[Tissue,"X_Negative"] = sum(focal.express$R< -0.5 & focal.express$P<0.05 & focal.express$chr=="chrX")
+    df[Tissue,"A_Negative"] = sum(focal.express$R< -0.5 & focal.express$P<0.05 & focal.express$chr=="chrA")
+  }
+}
+  df$Pratio = df$X_Positive/(df$X_Positive+df$A_Positive)
+  df$Nratio = df$X_Negative/(df$X_Negative+df$A_Negative)
+  df$tissue = row.names(df)
+  df = df[sort(df$tissue),]
+
+  testP = c()
+  for (i in 1:nrow(df)) {
+    testP[i] = fisher.test(as.data.frame(matrix(as.numeric(df[i,1:4]),nrow = 2)))$p.value
+  }
+  df %<>% dplyr::select(.,c(ends_with("ratio"),tissue)) %>% 
+    pivot_longer(.,cols=1:3) %>% dplyr::filter(.,name != "Meanratio") %>% as.data.frame()
+  df$name %<>% factor(.,levels = c("Pratio","Nratio"))
+  ggplot(df,aes(tissue,value*100,fill=name))+geom_bar(stat = "identity",position = "dodge")+theme_classic()+
+  theme(axis.text.x = element_text(size = 12,angle = 45,hjust = 1,vjust = 1),
+        axis.title.x = element_blank(),
+        axis.text.y = element_text(size = 12),
+        axis.title.y = element_text(size = 14))+
+  xlab("Tissue")+ylab("(%) X-linked genes")+
+  scale_y_continuous(expand = c(0, 0))+coord_cartesian(ylim = c(0,8))+
+  geom_hline(yintercept = 4.4,color="grey",linetype = "dashed")+
+  geom_text(aes(x,y,label =lab),inherit.aes=FALSE,
+            data = data.frame(x = 1:length(unique(df$tissue)),
+                              y = 7.5,
+                              lab = cut(testP,breaks = c(1,0.05,0.01,0.001,0),
+                                        labels = rev(c("","*","**","***")))),
+            vjust = 1, size=7)
+  ggsave(filename = paste0("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Picture/003.Mouse.RatioXlinked.Tissue.",sex,".pdf")
+       ,device = "pdf",width = 5.5, height = 4.5)
+}
+```
+
+## For mouse X:A ratio tissue danamics
+### counts2FPKM
+```{r}
+rm(list = ls())
+a = fread("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/GSE132040_190214_A00111_0269_AHH3J3DSXX_190214_A00111_0270_BHHMFWDSXX.csv") %>%
+  as.data.frame()
+length <- read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/Mouse.nonreExonlength.bed",
+                       header = FALSE,sep = "\t",stringsAsFactors = FALSE)
+#nonredundant gene length
+gene.length <- tapply(length$V5, length$V4, sum) %>% as.data.frame() 
+a$length = gene.length[match(a$gene,row.names(gene.length)),1]
+row.names(a) = a$gene
+a = na.omit(a[,-1])
+
+totalcounts <- colSums(a[,-ncol(a)])
+rpkm <- t(do.call(rbind, lapply(1:length(totalcounts), function(i){
+  10^9*a[,i]/a$length/totalcounts[i]}))) %>% as.data.frame()
+row.names(rpkm) = row.names(a)
+colnames(rpkm) = colnames(a)[-ncol(a)]
+write.table(rpkm,file = "~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Savedata/Mouse.allgene.fpkm.txt",
+                sep = "\t",quote = F,row.names = T,col.names = T)
+```
+
+### X:A ratio across samples with FPKM cutoff
+```{r}
+rm(list = ls())
+gc()
+rm(list = ls())
+a = fread("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Savedata/Mouse.allgene.fpkm.txt") %>% as.data.frame()
+colnames(a) %<>% gsub(".gencode.vM19","",.)
+row.names(a) = a$V1
+info = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/GSE132040_MACA_Bulk_metadata.csv")
+info$characteristics..age %<>% as.numeric()
+info$source.name %<>% lapply(.,function(x)strsplit(x,split = "_",fixed = T)[[1]][1]) %>% unlist() %>%
+  gsub("Limb","Limb Muscle",.) %>% gsub("Small","Small Intestine",.)
+
+if (all(colnames(a)[-1] %in% info$Sample.name)) {
+  info %<>% dplyr::filter(.,!grepl("NA",source.name)) #discard samples without detailed information
+  info$sample = paste(info$source.name,info$characteristics..sex,info$characteristics..age,sep = "_") 
+  a = a[,info$Sample.name] #order
+}
+
+b = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/Mouse.gencode.gene.bed",header = F,sep = "\t",stringsAsFactors = F)
+
+for (T in unique(info$source.name)){
+  focal.tissue <- dplyr::filter(info,source.name == T)
+  focal.express <- a[,focal.tissue$Sample.name]
+  focal.express = focal.express[,apply(focal.express, 2, function(x)sum(x>0)>1000)] #delete tissue with only a few genes expressed
+  focal.express$type = b[match(row.names(focal.express),b$V6),5]
+  focal.express %<>% dplyr::filter(.,type == "protein_coding") %>% dplyr::select(.,-type)
+  focal.express$chr = b[match(row.names(focal.express),b$V6),1]
+  
+  ratio = matrix(0,ncol = 12,nrow = ncol(focal.express)-1) %>% as.data.frame()
+  colnames(ratio) = c("All",(0:10)*0.1)
+  row.names(ratio) = colnames(focal.express)[-ncol(focal.express)]
+      
+  focal.express.x = focal.express[focal.express$chr=="chrX",-ncol(focal.express)]
+  focal.express.auto = focal.express[focal.express$chr!="chrX",-ncol(focal.express)]
+      
+  for (n in 1:12) {
+    cutoff = (n-2)*0.1
+    mean.x = t(do.call(rbind, lapply(1:ncol(focal.express.x), function(i){
+      mean(focal.express.x[focal.express.x[,i]>cutoff,i])}))) %>% as.data.frame()
+    mean.auto = t(do.call(rbind, lapply(1:ncol(focal.express.auto), function(i){
+      mean(focal.express.auto[focal.express.auto[,i]>cutoff,i])}))) %>% as.data.frame()
+    ratio[,n] = as.numeric(mean.x/mean.auto )
+  }
+  ratio$time = info[match(row.names(ratio),info$Sample.name),5]
+  ratio$tissue = row.names(ratio)
+  #ratio = ratio[order(ratio$time),]
+  #ratio$tissue %<>% factor(.,levels = .)
+  ratio$tss = focal.tissue[match(ratio$tissue,focal.tissue$Sample.name),"sample"]
+  ratio = ratio[order(ratio$tss),]
+  
+  freq = table(ratio$tss) %>% as.data.frame()
+  sample.rep = c()
+  for (i in 1:nrow(freq)) {
+    sample.rep = c(sample.rep,paste0(freq[i,1],"_rep",1:freq[i,2]))
+  }
+  ratio$tss  = sample.rep
+  ratio = ratio[order(ratio$time),]
+  ratio$tss %<>% factor(.,levels = .)
+  cor = cor.test(ratio[,12],ratio$time,method = "spearman")
+  ratio %<>% pivot_longer(.,cols=1:12)
+  
+  p = ggplot(ratio,aes(tss,value))+geom_line(aes(group = name,color=name))+theme_classic()+
+    theme(axis.title.x= element_blank(),
+          axis.text.x = element_text(size=14,angle = 90, hjust = 1, vjust = 0.5),
+          axis.title.y=element_text(size=18),axis.text.y = element_text(size=16))+
+    ylab("X:A ratio")+coord_cartesian(ylim = c(0,1.8))+
+    geom_hline(yintercept = 1,color="black",linetype="dashed")+
+    geom_hline(yintercept = 0.5,color="black",linetype="dashed")+
+    scale_color_manual(values=c("#fc9272",rep("grey",9),"#A40C0E","black"),name="Cutoff")+
+    #scale_color_manual(values=c("#61439A",rep("grey",4),"#EE1F26",rep("grey",4),"#862461"),name="Cutoff")+
+    annotate(geom="text", x=12, y=1.6, size=8,
+             label=paste0("R=",round(cor$estimate,2),", p-value=",format(cor$p.value,2)))
+  ggsave(p,filename = paste0("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Picture/","003.Mouse.ExpressRatio.FPKM.",T,".pdf"),
+         device = "pdf",width = 12, height = 7)
+  topptx(p,filename = paste0("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Picture/","003.Mouse.ExpressRatio.FPKM.",T,".pptx"),width = 12, height = 7)
+}
+```
+
+### (MF)X:A ratio with all samples
+```{r}
+rm(list = ls())
+gc()
+rm(list = ls())
+a = fread("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Savedata/Mouse.allgene.fpkm.txt") %>% as.data.frame()
+colnames(a) %<>% gsub(".gencode.vM19","",.)
+row.names(a) = a$V1
+info = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/GSE132040_MACA_Bulk_metadata.csv")
+info$characteristics..age %<>% as.numeric()
+info$source.name %<>% lapply(.,function(x)strsplit(x,split = "_",fixed = T)[[1]][1]) %>% unlist() %>%
+  gsub("Limb","Limb Muscle",.) %>% gsub("Small","Small Intestine",.)
+
+if (all(colnames(a)[-1] %in% info$Sample.name)) {
+  info %<>% dplyr::filter(.,!grepl("NA",source.name)) #discard samples without detailed information
+  info$sample = paste(info$source.name,info$characteristics..sex,info$characteristics..age,sep = "_") 
+  a = a[,info$Sample.name] #order
+  a = a[,apply(a, 2, function(x)sum(x>0)>1000)] #delete tissue with only a few genes expressed
+  info %<>% dplyr::filter(.,Sample.name %in% colnames(a))
+}
+b = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/Mouse.gencode.gene.bed",header = F,sep = "\t",stringsAsFactors = F)
+a$type = b[match(row.names(a),b$V6),5]
+a %<>% dplyr::filter(.,type == "protein_coding") %>% dplyr::select(.,-type)
+
+if (all(info$Sample.name==colnames(a))) {
+  mbg = t(apply(a, 1, function(x)tapply(x, info$sample, mean)))  %>% as.data.frame() #check order
+}
+
+mbg$chr = b[match(row.names(mbg),b$V6),1]
+focal.express.x = mbg[mbg$chr=="chrX",-ncol(mbg)]
+focal.express.auto = mbg %>% dplyr::filter(chr %in% paste0("chr",1:100))%>% dplyr::select(.,-chr)
+
+e = matrix(0,nrow = ncol(mbg)-1,ncol = 2) %>% as.data.frame()
+colnames(e) = c("sample","ratio")
+e$sample = colnames(mbg)[-ncol(mbg)]
+for (i in 1:nrow(e)) {
+  mean.x = mean(focal.express.x[focal.express.x[,i]>1,i])
+  mean.auto = mean(focal.express.auto[focal.express.auto[,i]>1,i])
+  e[i,2] = mean.x/mean.auto 
+}
+e$tissue = e$sample %>% lapply(.,function(x)strsplit(x,split = "_",fixed = TRUE)[[1]][1]) %>% unlist()
+e$stage = e$sample %>% lapply(.,function(x)strsplit(x,split = "_",fixed = TRUE)[[1]][3]) %>% unlist() %>% as.numeric() 
+write.table(e,file = "~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Savedata/Mouse_tissues_XAratio.txt",sep = "\t",row.names = FALSE, col.names = TRUE,quote = FALSE)
+e %<>% dplyr::arrange(.,stage)
+e$stage %<>% factor(.)
+e$sex = e$sample %>% lapply(.,function(x)strsplit(x,split = "_",fixed = TRUE)[[1]][2]) %>% unlist() %>%
+  gsub("m","Male",.,fixed = TRUE) %>% gsub("f","Female",.) %>% factor(.,levels = c("Male","Female"))
+  
+
+ggplot(e,aes(stage,ratio))+geom_line(aes(group=tissue,color=tissue))+facet_grid(.~sex)+
+  theme_classic()
+p = ggplot(e,aes(stage,ratio))+geom_smooth(aes(group=tissue,color=tissue),se=F)+
+  facet_grid(.~sex,scales = "free_x")+theme_classic()+
+  xlab("Age (months)")+ylab("X:A ratio")+
+  theme(axis.title.x = element_text(size=16),
+        axis.title.y=element_text(size=16),
+        axis.text.x = element_text(size=14,angle = 45, hjust = 1, vjust = 1),
+        axis.text.y=element_text(size=14),
+        strip.text.x = element_text(size=14))+
+  scale_color_manual(values=c("#0093d6","#d5423e","#00a651","#7862a4","#ee9330","#fad227","#f4c489",
+                              "#6dc0ea","#eeaaa8","#95cea3","#c9bad4","#b8b8c2","#eae299","#b35275",
+                              "#000000","#f397c3","#eb3391"))+
+  geom_hline(yintercept = 1,color="gray",linetype="dashed")+
+  geom_hline(yintercept = 0.75,color="gray",linetype="dashed")+
+  geom_hline(yintercept = 0.5,color="gray",linetype="dashed")+
+  labs(color = "Tissue") #match to what group by, here is color
+  ggsave(p,filename = paste0("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Picture/","003.Mouse.ExpressRatio.alltissue.pdf"),
+         device = "pdf",width = 9, height = 6)
+  topptx(p,filename = paste0("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Picture/","003.Mouse.ExpressRatio.alltissue.pptx"),width = 9, height = 6)
+```
+
+### (merge sex)X:A ratio with all samples
+```{r}
+rm(list = ls())
+gc()
+rm(list = ls())
+a = fread("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Savedata/Mouse.allgene.fpkm.txt") %>% as.data.frame()
+colnames(a) %<>% gsub(".gencode.vM19","",.)
+row.names(a) = a$V1
+info = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/GSE132040_MACA_Bulk_metadata.csv")
+info$characteristics..age %<>% as.numeric()
+info$source.name %<>% lapply(.,function(x)strsplit(x,split = "_",fixed = T)[[1]][1]) %>% unlist() %>%
+  gsub("Limb","Limb Muscle",.) %>% gsub("Small","Small Intestine",.)
+
+if (all(colnames(a)[-1] %in% info$Sample.name)) {
+  info %<>% dplyr::filter(.,!grepl("NA",source.name)) #discard samples without detailed information
+  info$sample = paste(info$source.name,info$characteristics..age,sep = "_") 
+  a = a[,info$Sample.name] #order
+  a = a[,apply(a, 2, function(x)sum(x>0)>1000)] #delete tissue with only a few genes expressed
+  info %<>% dplyr::filter(.,Sample.name %in% colnames(a))
+}
+b = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/Mouse.gencode.gene.bed",header = F,sep = "\t",stringsAsFactors = F)
+a$type = b[match(row.names(a),b$V6),5]
+a %<>% dplyr::filter(.,type == "protein_coding") %>% dplyr::select(.,-type)
+
+if (all(info$Sample.name==colnames(a))) {
+  mbg = t(apply(a, 1, function(x)tapply(x, info$sample, mean)))  %>% as.data.frame() #check order
+}
+
+mbg$chr = b[match(row.names(mbg),b$V6),1]
+focal.express.x = mbg[mbg$chr=="chrX",-ncol(mbg)]
+focal.express.auto = mbg %>% dplyr::filter(chr %in% paste0("chr",1:100))%>% dplyr::select(.,-chr)
+
+e = matrix(0,nrow = ncol(mbg)-1,ncol = 2) %>% as.data.frame()
+colnames(e) = c("sample","ratio")
+e$sample = colnames(mbg)[-ncol(mbg)]
+for (i in 1:nrow(e)) {
+  mean.x = mean(focal.express.x[focal.express.x[,i]>1,i])
+  mean.auto = mean(focal.express.auto[focal.express.auto[,i]>1,i])
+  e[i,2] = mean.x/mean.auto 
+}
+e$tissue = e$sample %>% lapply(.,function(x)strsplit(x,split = "_",fixed = TRUE)[[1]][1]) %>% unlist()
+e$stage = e$sample %>% lapply(.,function(x)strsplit(x,split = "_",fixed = TRUE)[[1]][2]) %>% unlist() %>% as.numeric() 
+write.table(e,file = "~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Savedata/Mouse_tissues_XAratio.mergesex.txt",sep = "\t",row.names = FALSE, col.names = TRUE,quote = FALSE)
+e %<>% dplyr::arrange(.,stage)
+e$stage %<>% factor(.)
+e$sex = e$sample %>% lapply(.,function(x)strsplit(x,split = "_",fixed = TRUE)[[1]][2]) %>% unlist() %>%
+  gsub("m","Male",.,fixed = TRUE) %>% gsub("f","Female",.) %>% factor(.,levels = c("Male","Female"))
+  
+
+ggplot(e,aes(stage,ratio))+geom_line(aes(group=tissue,color=tissue))+#facet_grid(.~sex)+
+  theme_classic()
+p = ggplot(e,aes(stage,ratio))+geom_smooth(aes(group=tissue,color=tissue),se=F)+
+  theme_bw()+
+  xlab("Age (months)")+ylab("X:A ratio")+
+  theme(panel.grid.major =element_blank(), panel.grid.minor = element_blank(),panel.background = element_blank(),
+        axis.title.x = element_text(size=16),
+        axis.title.y=element_text(size=16),
+        axis.text.x = element_text(size=14),
+        axis.text.y=element_text(size=14),
+        strip.text.x = element_text(size=14))+
+  scale_color_manual(values=c("#0093d6","#d5423e","#00a651","#7862a4","#ee9330","#fad227","#f4c489",
+                              "#6dc0ea","#eeaaa8","#95cea3","#c9bad4","#b8b8c2","#eae299","#b35275",
+                              "#000000","#f397c3","#eb3391"))+
+  geom_hline(yintercept = 1,color="gray",linetype="dashed")+
+  geom_hline(yintercept = 0.75,color="gray",linetype="dashed")+
+  geom_hline(yintercept = 0.5,color="gray",linetype="dashed")+
+  scale_y_continuous(breaks = c(0.5,0.75,1),labels =  c(0.5,0.75,1.00))+
+  labs(color = "Tissue") #match to what group by, here is color+
+
+  ggsave(p,filename = paste0("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Picture/","003.Mouse.ExpressRatio.alltissue.mergesex.pdf"),
+         device = "pdf",width = 6.5, height = 6)
+  topptx(p,filename = paste0("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Picture/","003.Mouse.ExpressRatio.alltissue.pptx"),width = 9, height = 6)
+```
+
+### (merge sex, stage) X:A ratio
+```{r}
+rm(list = ls())
+gc()
+rm(list = ls())
+a = fread("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Savedata/Mouse.allgene.fpkm.txt") %>% as.data.frame()
+colnames(a) %<>% gsub(".gencode.vM19","",.)
+row.names(a) = a$V1
+info = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/GSE132040_MACA_Bulk_metadata.csv")
+info$characteristics..age %<>% as.numeric()
+info$source.name %<>% lapply(.,function(x)strsplit(x,split = "_",fixed = T)[[1]][1]) %>% unlist() %>%
+  gsub("Limb","Limb Muscle",.) %>% gsub("Small","Small Intestine",.)
+
+if (all(colnames(a)[-1] %in% info$Sample.name)) {
+  info %<>% dplyr::filter(.,!grepl("NA",source.name)) #discard samples without detailed information
+  info$sample = paste(info$source.name,info$characteristics..age,sep = "_") 
+  a = a[,info$Sample.name] #order
+  a = a[,apply(a, 2, function(x)sum(x>0)>1000)] #delete tissue with only a few genes expressed
+  info %<>% dplyr::filter(.,Sample.name %in% colnames(a))
+}
+b = read.csv("~/MamDC/Data/Seqdata/NicholasTony2020NatureRNAseq/Mouse.gencode.gene.bed",header = F,sep = "\t",stringsAsFactors = F)
+a$type = b[match(row.names(a),b$V6),5]
+a %<>% dplyr::filter(.,type == "protein_coding") %>% dplyr::select(.,-type)
+
+if (all(info$Sample.name==colnames(a))) {
+  mbg = t(apply(a, 1, function(x)tapply(x, info$source.name, mean)))  %>% as.data.frame() #check order
+}
+
+mbg[,c("chr","type")] <- b[match(row.names(mbg),b$V6),c(1,5)]
+mbg <- dplyr::filter(mbg,type == "protein_coding" & chr %in% paste0("chr",c(1:22,"X"))) %>%
+  dplyr::select(.,-type)
+  dim(mbg)
+  mbg[mbg$chr!="chrX","chr"]="chrA"
+  
+  mbg %<>% pivot_longer(cols=1:(ncol(mbg)-1), names_to= "samples", values_to = "expression")
+  
+  e <- matrix(0,nrow = length(unique(sort(mbg$samples))),ncol = 4) %>% as.data.frame()
+  colnames(e) <- c("sample","mean","CI5","CI95")
+  e$sample <- unique(sort(mbg$samples))
+  cutoff = 1
+  for (T in unique(sort(mbg$samples))) {
+    b <- dplyr::filter(mbg,samples %in% T & expression > cutoff) %>% as.data.frame()
+    #b$expression <- b$expression/mean(b[b$chr=="chrA","expression"]) #Allexpress/Aexpress
+    d <- list()
+    for (j in 1:1000) {
+      #d[[j]] <- sample(b[b$chr=="chrX","expression"],size = floor(nrow(b[b$chr=="chrX",])/2), replace = TRUE)
+      d[[j]] <- median(b[b$chr=="chrX","expression"])/median(sample(b[b$chr=="chrA","expression"],
+                                                                          size = sum(b$chr=="chrX"), replace = FALSE))
+         
+      
+    }
+    boot.mean <- unlist(lapply(d, median))
+    quantile(boot.mean, probs = c(0.05, 0.95))
+    e[e$sample==T,2:4] <- c(median(b[b$chr=="chrX","expression"]),quantile(boot.mean, probs = c(0.05, 0.95))[1],quantile(boot.mean, probs = c(0.05, 0.95))[2]) %>% as.numeric()
+  }
+  write.table(e,file = "~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Savedata/Mouse_tissues_XAratio.txt",sep = "\t",row.names = FALSE, col.names = TRUE,quote = FALSE)
+```
+
+```{r}
+{ #X:A ratio & tissue specific genes
+  library(Hmisc)
+  library(ggplotify)
+  library(eoffice)
+  rm(list = ls())
+  e = read.csv("~/MamDC/Result/NicholasTony2020NatureRNAseq/Mouse/Savedata/Mouse_tissues_XAratio.txt",
+               sep = "\t",header = TRUE,stringsAsFactors = F)
+  e$sample %<>% Hmisc::capitalize(.) %>% gsub("_"," ",.) %>% gsub("."," ",.,fixed = T)
+  e = e[order(e$mean,decreasing = TRUE),]
+  e$sample %<>% factor(.,levels = .)
+  p = ggplot(e,aes(sample,mean))+geom_point(size=3.0)+geom_errorbar(aes(x = sample, ymax=CI5, ymin=CI95,width =0.3))+
+    ylab("X:A ratio")+theme_bw()+theme(axis.title.x=element_text(size=18),axis.title.y=element_blank(),
+                                       axis.text.x = element_text(size=16),axis.text.y = element_text(size=14))+
+    scale_y_continuous(breaks = c(0,0.5,1,2),labels = c(0,0.5,1,2))+
+    geom_hline(aes(yintercept=1),color="black",linetype="dashed")+
+    geom_hline(aes(yintercept=0.5),color="black",linetype="dashed")+coord_flip()
+  ggsave(p,filename = "~/MamDC/Result/WangKuster2019MSBRNAseq/Human/Picture/Expressionratio.alltissues.pdf",
+         device = "pdf", width = 5.8, height = 7)
+  topptx(p,filename = "~/MamDC/Result/WangKuster2019MSBRNAseq/Human/Picture/Expressionratio.alltissues.pptx",
+         width = 5.8, height = 7)
+}
+  
+```
+

@@ -1,0 +1,141 @@
+---
+title: "008.1.Epigenome.ChromHmm.overlappromoter.sh"
+author: "qians"
+date: "12/28/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+coding promoter
+```{r}
+rm(list = ls())
+for (Species in c("Human","Mouse")) {
+  a = read.csv(file.path("~/Pseudo/Data/Ref",Species,paste0(Species,".promoter.bed")),header = FALSE,sep = "\t",stringsAsFactors = FALSE)
+  b= read.csv(file.path("~/MamDC/Data/Ref",Species,paste0("gene",Species,".bed")),
+              header = FALSE,sep = "\t",stringsAsFactors = F)
+  a$type = b[match(a$V4,b$V4),5]
+  a %<>% dplyr::filter(.,type %in% " protein_coding")
+  write.table(a,file = file.path("~/MamDC/Data/Ref",Species,paste0(Species,".promoter.coding.bed")),
+              quote = FALSE,row.names = FALSE,sep = "\t",col.names = FALSE)
+}
+  
+```
+
+overlap with epigenome chromhmm
+```{bash}
+#15 state
+bedtools intersect -a ~/Pseudo/Result/Roadmap/Chromhmm/all.mnemonics.bed -b ~/MamDC/Data/Ref/Human/Human.promoter.coding.bed -wo > ~/MamDC/Result/Roadmap/Chromhmm/Savedata/all.mnemonics.promoter.bed
+#18 state
+
+#50 state
+bedtools intersect -a ~/Pseudo/Data/Seqdata/Roadmap/Chromhmm/50state/all.50_segments.hg38.bed -b ~/MamDC/Data/Ref/Human/Human.promoter.coding.bed -wa -wb > ~/MamDC/Result/Roadmap/Chromhmm/Savedata/50state/all.50_segments.hg38.promoter.bed
+
+```
+
+proportion ~ chr
+```{r}
+rm(list = ls())
+library(ggplotify)
+library(eoffice)
+gene = fread("/home/qians/MamDC/Result/Roadmap/Chromhmm/Savedata/all.mnemonics.promoter.bed",header = FALSE)
+gene$epitype = paste(gene$V5,gene$V1,sep = "xYx")
+typesum = tapply(gene$V12, gene$epitype, sum) %>% as.data.frame()
+typesum$region = lapply(row.names(typesum),function(x)strsplit(x,"xYx",fixed=T)[[1]][2]) %>% unlist()
+typesum$epitype = lapply(row.names(typesum),function(x)strsplit(x,"xYx",fixed=T)[[1]][1]) %>% unlist()
+typesum$num = lapply(typesum$epitype,function(x)strsplit(x,"_",fixed=T)[[1]][1]) %>% unlist() %>% as.numeric()
+typesum = typesum[order(typesum$num),]
+typesum$epitype %<>% factor(.,levels = unique(.))
+typesum %<>% dplyr::filter(.,region !="chrY")
+typesum$region %<>% factor(.,levels = c(paste0("chr",c(1:22,"X"))))
+p1 = ggplot(typesum,aes(region,.,fill=epitype))+geom_bar(stat = "identity",position = "stack")+
+  scale_fill_manual(values=c("#FF0000","#FF4500","#32CD32","#008000","#006400","#C2E105","#FFFF00","#66CDAA",
+                             "#8A91D0","#CD5C5C","#E9967A","#BDB76B","#808080","#C0C0C0","#e5e5e5"))+
+  theme_bw()+ylab("ChromHmm state (bp)")+
+  theme(axis.title.x=element_blank(),legend.position="bottom",
+        axis.text.x = element_text(size=12,angle = 45, hjust = 1, vjust = 1),
+        axis.title.y=element_text(size=14),axis.text.y = element_text(size=12))
+topptx(p1,filename = "~/MamDC/Result/Roadmap/Chromhmm/Picture/Human.promoter.chromhmm.bp.pptx",
+       width = 7,height = 6)
+ggsave(p1,filename = "~/MamDC/Result/Roadmap/Chromhmm/Picture/Human.promoter.chromhmm.bp.pdf",
+       width = 7,height = 6)
+
+bpbychr = tapply(typesum$., typesum$region, sum) %>% as.data.frame()
+typesum$all = bpbychr[match(typesum$region,row.names(bpbychr)),1]
+typesum$freq = typesum$./typesum$all
+
+p2 = ggplot(typesum,aes(region,freq,fill=epitype))+geom_bar(stat = "identity",position ="stack")+
+  scale_fill_manual(values=c("#FF0000","#FF4500","#32CD32","#008000","#006400","#C2E105","#FFFF00","#66CDAA",
+                             "#8A91D0","#CD5C5C","#E9967A","#BDB76B","#808080","#C0C0C0","#e5e5e5"))+
+  theme_bw()+ylab("Proportion in state")+
+  theme(axis.title.x=element_blank(),legend.position="bottom",
+        axis.text.x = element_text(size=12,angle = 45, hjust = 1, vjust = 1),
+        axis.title.y=element_text(size=14),axis.text.y = element_text(size=12))
+topptx(p2,filename = "~/MamDC/Result/Roadmap/Chromhmm/Picture/Human.promoter.chromhmm.proportion.pptx",
+       width = 7,height = 6)
+ggsave(p2,filename = "~/MamDC/Result/Roadmap/Chromhmm/Picture/Human.promoter.chromhmm.proportion.pdf",
+       width = 7,height = 6)
+```
+
+detailed epistate ~ X/A
+```{bash}
+awk -F "\t" '{print $5}' ~/Pseudo/Result/Roadmap/Chromhmm/all.mnemonics.bed | sort| uniq -c > all.epistate.number
+```
+
+```{r}
+rm(list = ls())
+library(ggplotify)
+library(eoffice)
+gene = fread("/home/qians/MamDC/Result/Roadmap/Chromhmm/Savedata/all.mnemonics.promoter.bed",header = FALSE)
+gene %<>% dplyr::filter(.,V6 != "chrY")
+
+all = fread("~/MamDC/Result/Roadmap/Chromhmm/Savedata/all.epistate.number") %>% as.data.frame()
+prop.state = table(gene$V6,gene$V5) %>% as.data.frame()
+prop.state$all = all[match(prop.state$Var2,all$V2),1]
+prop.state$freq = prop.state$Freq/prop.state$all
+
+prop.state$num = lapply(prop.state$Var2,function(x)strsplit(as.character(x),"_",fixed=T)[[1]][1]) %>% unlist() %>% as.numeric()
+prop.state = prop.state[order(prop.state$num),]
+prop.state$Var2 %<>% factor(.,levels = unique(.))
+prop.state$Var1 %<>% factor(.,levels = c(paste0("chr",c(1:22,"X"))))
+p1 = ggplot(prop.state,aes(Var2,freq,fill=Var2))+geom_bar(stat="identity",position = "dodge")+
+  scale_fill_manual(values=c("#FF0000","#FF4500","#32CD32","#008000","#006400","#C2E105","#FFFF00","#66CDAA",
+                             "#8A91D0","#CD5C5C","#E9967A","#BDB76B","#808080","#C0C0C0","#e5e5e5"))+
+  theme_bw()+xlab("State")+ylab("Propotion of state overlapping promoter")+
+  theme(axis.title.x=element_text(size=14),legend.position="bottom",
+        axis.text.x = element_text(size=12,angle = 90, hjust = 1, vjust = 0.5),
+        axis.title.y=element_text(size=14),axis.text.y = element_text(size=12))+
+  facet_wrap(.~Var1)
+topptx(p1,filename = "~/MamDC/Result/Roadmap/Chromhmm/Picture/Human.epistate.chr.chromhmm.proportion.pptx",
+       width = 10,height = 7)
+
+prop.state$Var1 %<>% as.character()
+prop.state[prop.state$Var1!="chrX","Var1"]= "A"
+prop.state[prop.state$Var1=="chrX","Var1"]= "X" #NO Y
+
+prop.state.AX = tapply(prop.state$freq, paste(prop.state$Var1,prop.state$Var2,sep = "."),mean) %>% as.data.frame()
+prop.state.AX$chr = lapply(row.names(prop.state.AX),function(x)strsplit(as.character(x),".",fixed=T)[[1]][1]) %>% unlist()
+prop.state.AX$type = lapply(row.names(prop.state.AX),function(x)strsplit(as.character(x),".",fixed=T)[[1]][2]) %>% unlist()
+prop.state.AX$type %<>% factor(.,levels = levels(prop.state$Var2))
+for (i in 1:nrow(prop.state.AX)) {
+  if (prop.state.AX[i,2]=="A") {
+    prop.state.AX[i,1] = -prop.state.AX[i,1]
+  }
+}
+p2 = ggplot(prop.state.AX,aes(type,.,fill=type))+geom_bar(stat = "identity",position = "dodge")+
+    scale_fill_manual(values=c("#FF0000","#FF4500","#32CD32","#008000","#006400","#C2E105","#FFFF00","#66CDAA",
+                               "#8A91D0","#CD5C5C","#E9967A","#BDB76B","#808080","#C0C0C0","#e5e5e5"))+
+    theme_classic()+xlab("State")+ylab("Propotion of state overlapping promoter")+
+    geom_hline(yintercept = 0,linetype=1,color="black",size=0.6)+
+    theme(axis.title.x=element_text(size=12),legend.position="bottom",
+          axis.text.x = element_text(size=10,angle = 90, hjust = 1, vjust = 0.5),
+          axis.title.y=element_text(size=12),axis.text.y = element_text(size=12))+
+    guides(fill=FALSE)
+  #geom_text(aes(label=abs(.)), position=position_dodge(width=0.9), hjust= -.25,vjust=0.25 ,size =3.5 , angle = 90)
+topptx(p2,filename = "~/MamDC/Result/Roadmap/Chromhmm/Picture/Human.epistate.AX.chromhmm.proportion.pptx",
+       width = 4.5,height = 4)
+ggsave(p2,filename = "~/MamDC/Result/Roadmap/Chromhmm/Picture/Human.epistate.AX.chromhmm.proportion.pdf",
+       width = 4.5,height = 4)
+```

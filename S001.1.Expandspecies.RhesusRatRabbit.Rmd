@@ -1,0 +1,126 @@
+# Expand thress species: Rhesus, Rat, Rabbit
+```{bash}
+#RPKM data
+cd ~/MamDC/Data/Seqdata/CardosoKaessmann2019NatureRNAseq
+mkdir Rhesus Rat Rabbit
+cd Rhesus/
+wget ftp://ftp.ebi.ac.uk/pub/databases/microarray/data/experiment/MTAB/E-MTAB-6813/E-MTAB-6813.processed.1.zip
+cd Rat/
+wget ftp://ftp.ebi.ac.uk/pub/databases/microarray/data/experiment/MTAB/E-MTAB-6811/E-MTAB-6811.processed.1.zip
+cd Rabbit/
+wget ftp://ftp.ebi.ac.uk/pub/databases/microarray/data/experiment/MTAB/E-MTAB-6782/E-MTAB-6782.processed.1.zip
+
+#Annotation data
+cd ~/MamDC/Data/Ref
+wget -P Rhesus/ ftp://ftp.ensembl.org/pub/release-85/gtf/macaca_mulatta/Macaca_mulatta.MMUL_1.85.chr.gtf.gz
+gunzip macaca_mulatta/Macaca_mulatta.MMUL_1.85.chr.gtf.gz
+grep -w gene Macaca_mulatta.MMUL_1.85.chr.gtf | awk -F ";" '{print $1"\t"$(NF-1)}'| awk -F "\t" '{print $1"\t"$4"\t"$5"\t"$9"\t"$10"\t"$7}'|  sed 's/gene_id //g'| sed 's/gene_biotype //g'| sed 's/"//g' > Rhesus.gene.bed
+
+wget -P Rat ftp://ftp.ensembl.org/pub/release-79/gtf/rattus_norvegicus/Rattus_norvegicus.Rnor_5.0.79.gtf.gz
+gunzip Rattus_norvegicus.Rnor_5.0.79.gtf.gz
+grep -w gene Rattus_norvegicus.Rnor_5.0.79.gtf | awk -F ";" '{print $1"\t"$(NF-1)}'| awk -F "\t" '{print $1"\t"$4"\t"$5"\t"$9"\t"$10"\t"$7}'|  sed 's/gene_id //g'| sed 's/gene_biotype //g'| sed 's/"//g' > Rat.gene.bed
+
+wget -P Rabbit ftp://ftp.ensembl.org/pub/release-102/gtf/oryctolagus_cuniculus/Oryctolagus_cuniculus.OryCun2.0.102.chr.gtf.gz
+gunzip Oryctolagus_cuniculus.OryCun2.0.102.chr.gtf.gz
+grep -w gene Oryctolagus_cuniculus.OryCun2.0.102.chr.gtf | awk -F ";" '{print $1"\t"$(NF-1)}'| awk -F "\t" '{print $1"\t"$4"\t"$5"\t"$9"\t"$10"\t"$7}'|  sed 's/gene_id //g'| sed 's/gene_biotype //g'| sed 's/"//g' > Rabbit.gene.bed
+
+cd Opossum/
+wget -P Opossum/ ftp://ftp.ensembl.org/pub/release-90/gtf/monodelphis_domestica/Monodelphis_domestica.BROADO5.90.chr.gtf.gz
+gunzip Monodelphis_domestica.BROADO5.90.chr.gtf.gz
+grep -w gene Monodelphis_domestica.BROADO5.90.chr.gtf | awk -F ";" '{print $1"\t"$(NF-1)}'| awk -F "\t" '{print $1"\t"$4"\t"$5"\t"$9"\t"$10"\t"$7}'|  sed 's/gene_id //g'| sed 's/gene_biotype //g'| sed 's/"//g' > Opossum.gene.bed
+```
+
+# mean ratio
+```{r}
+rm(list = ls())
+gc()
+rm(list = ls())
+
+focal.species = "Rabbit" #"Rat" #"Rhesus"
+a = fread(file.path("/home/qians/MamDC/Data/Seqdata/CardosoKaessmann2019NatureRNAseq",focal.species,paste0(focal.species,".RPKM.txt"))) %>% as.data.frame()
+a[1:3,1:3]
+b = read.csv(file.path("/home/qians/MamDC/Data/Ref",focal.species,paste0(focal.species,".gene.bed")),header = FALSE,sep = "\t")
+a[,c("chr","type")] = b[match(a$V1,b$V4),c(1,5)]
+a %<>% na.omit() %>% dplyr::filter(.,chr %in% c(1:100,"X") & type == " protein_coding")
+a[a$chr!="X","chr"]="A"
+#apply(a[,2:(ncol(a)-2)], 2, function(x)tapply(x,a$chr,mean))[2,]/apply(a[,2:(ncol(a)-2)], 2, function(x)tapply(x,a$chr,mean))[1,]
+
+focal.tissue.x = a[a$chr=="X",-c(1,ncol(a)-1,ncol(a))]
+focal.tissue.auto = a[a$chr!="X",-c(1,ncol(a)-1,ncol(a))]
+cutoff = 1
+mean.x = t(do.call(rbind, lapply(1:ncol(focal.tissue.x), function(i){
+  mean(focal.tissue.x[focal.tissue.x[,i]>cutoff,i])}))) %>% as.data.frame()
+mean.auto = t(do.call(rbind, lapply(1:ncol(focal.tissue.auto), function(i){
+  mean(focal.tissue.auto[focal.tissue.auto[,i]>cutoff,i])}))) %>% as.data.frame()
+ratio = as.numeric(mean.x/mean.auto ) %>% as.data.frame()
+ratio$name = colnames(focal.tissue.x)
+ratio$group = lapply(ratio$name, function(x)strsplit(x,split = ".",fixed = TRUE)[[1]][1]) %>% unlist()
+try = tapply(ratio$., ratio$group, mean) %>% as.data.frame()
+colnames(try) = "value"
+try$organ = row.names(try)
+
+sciname = focal.species %>% gsub("Rhesus","macaca_mulatta",.) %>% gsub("Rat","rattus_norvegicus",.) %>% gsub("Rabbit","monodelphis_domestica",.) # use opossum figure for rabbit
+prim = other_key[[sciname]]
+prim$value = 100
+for (i in c("brain","heart","liver","kidney")) {
+  prim[prim$organ==i,"value"] = try[try$organ==capitalize(i),"value"]
+}
+if (sciname == "macaca_mulatta") {
+  prim[prim$organ=="cerebellum","value"] = try[try$organ=="Cerebellum","value"]
+  prim[prim$organ=="prefrontal cortex","value"] = try[try$organ=="Cerebellum","value"] 
+  p1 = gganatogram(data=prim, outline = T, fillOutline='white', organism=sciname, sex='female', fill="value")  +
+                theme_void() +
+                ggtitle(sciname) + 
+                theme(plot.title = element_text(hjust=0.5, size=9)) + scale_fill_viridis_c(option="magma")+
+    #guides(fill=guide_legend(title="X:A ratio"))
+    coord_fixed()
+  topptx(p1,paste0("~/MamDC/Result/CardosoKaessmann2019NatureRNAseq/",focal.species,"/Picture/",focal.species,".bodyplot.kidney.pptx"),
+         width = 4,height = 5)
+  
+  prim[prim$organ=="kidney","value"] = try[try$organ=="Testis","value"] #for testis
+  p1 = gganatogram(data=prim, outline = T, fillOutline='white', organism=sciname, sex='female', fill="value")  +
+                theme_void() +
+                ggtitle(sciname) + 
+                theme(plot.title = element_text(hjust=0.5, size=9)) + scale_fill_viridis_c(option="magma")+
+    #guides(fill=guide_legend(title="X:A ratio"))
+    coord_fixed()
+  topptx(p1,paste0("~/MamDC/Result/CardosoKaessmann2019NatureRNAseq/",focal.species,"/Picture/",focal.species,".bodyplot.kidney2testis.pptx"),
+         width = 4,height = 5)
+}
+
+if (sciname == "rattus_norvegicus") {
+  prim[prim$organ=="thymus","value"] = try[try$organ=="Cerebellum",1]
+  prim[prim$organ=="uterus","value"] = try[try$organ=="Ovary",1]
+  prim[prim$organ=="gastrocnemius","value"] = try[try$organ=="Testis",1] # gastrocnemius other #4DAF4A 0.926
+  prim %<>% dplyr::filter(.,value != 100)
+  p1 = gganatogram(data=prim, outline = T, fillOutline='white', organism=sciname, sex='female', fill="value")  +
+                theme_void() +
+                theme(plot.title = element_text(hjust=0.5, size=9)) + scale_fill_viridis_c(option="magma")+
+    #guides(fill=guide_legend(title="X:A ratio"))
+    coord_fixed()
+  topptx(p1,paste0("~/MamDC/Result/CardosoKaessmann2019NatureRNAseq/",focal.species,"/Picture/",focal.species,".bodyplot.both.thymus2cerebellum.uterus2ovary.gastrocnemius2testis.pptx"),
+         width = 4,height = 5)
+}
+
+if (sciname == "monodelphis_domestica") {
+  prim[prim$organ=="cerebellum","value"] = try[try$organ=="Cerebellum","value"]
+  prim[prim$organ=="testis","value"] = try[try$organ=="Testis","value"]
+  #ovary 0.929  can use rat gastrocnemius
+  p1 = gganatogram(data=prim, outline = T, fillOutline='white', organism=sciname, sex='female', fill="value")  +
+                theme_void() +
+                theme(plot.title = element_text(hjust=0.5, size=9)) + scale_fill_viridis_c(option="magma")+
+    #guides(fill=guide_legend(title="X:A ratio"))
+    coord_fixed()
+  topptx(p1,paste0("~/MamDC/Result/CardosoKaessmann2019NatureRNAseq/",focal.species,"/Picture/",focal.species,".bodyplot.both.pptx"),
+         width = 4,height = 5)
+  
+  prim[prim$organ=="kidney","value"] = try[try$organ=="Ovary","value"]
+  p2 = gganatogram(data=prim, outline = T, fillOutline='white', organism=sciname, sex='female', fill="value")  +
+                theme_void() +
+                theme(plot.title = element_text(hjust=0.5, size=9)) + scale_fill_viridis_c(option="magma")+
+    #guides(fill=guide_legend(title="X:A ratio"))
+    coord_fixed()
+  topptx(p2,paste0("~/MamDC/Result/CardosoKaessmann2019NatureRNAseq/",focal.species,"/Picture/",focal.species,".bodyplot.both.kidney2ovary.pptx"),
+         width = 4,height = 5)
+}
+```
