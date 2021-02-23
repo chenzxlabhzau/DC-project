@@ -1,2 +1,2 @@
 # DC-project
-Dosage compensation project
+Scripts associated with dosage compensation project.
